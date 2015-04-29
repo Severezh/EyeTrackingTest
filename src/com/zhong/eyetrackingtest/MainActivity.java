@@ -12,14 +12,17 @@ import org.opencv.android.CameraBridgeViewBase.CvCameraViewFrame;
 import org.opencv.android.LoaderCallbackInterface;
 import org.opencv.android.OpenCVLoader;
 import org.opencv.core.Core;
+import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.opencv.core.MatOfRect;
+import org.opencv.core.Point;
 import org.opencv.core.Rect;
 import org.opencv.core.Scalar;
 import org.opencv.core.Size;
 import org.opencv.android.CameraBridgeViewBase;
 import org.opencv.android.CameraBridgeViewBase.CvCameraViewListener2;
 import org.opencv.objdetect.CascadeClassifier;
+import org.opencv.objdetect.Objdetect;
 import org.opencv.imgproc.Imgproc;
 
 import android.app.Activity;
@@ -28,35 +31,33 @@ import android.os.Bundle;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.View;
 import android.view.WindowManager;
 
 public class MainActivity extends Activity implements CvCameraViewListener2 {
 
     private static final String    TAG                 = "MainActivity";
-    private static final String    TESTTAG                 = "MainActivityTEST";
+    private static final String    TESTTAG             = "MainActivityTEST";
     private static final Scalar    FACE_RECT_COLOR     = new Scalar(0, 255, 0, 255);
-//    public static final int        JAVA_DETECTOR       = 0;
-//    public static final int        NATIVE_DETECTOR     = 1;
 
     private MenuItem               mItemFace50;
     private MenuItem               mItemFace40;
     private MenuItem               mItemFace30;
     private MenuItem               mItemFace20;
-//    private MenuItem               mItemType;
 
     private Mat                    mRgba;
     private Mat                    mGray;
-    private File                   mCascadeFile;
+    private Mat teplateR;
+	private Mat teplateL;
+//    private File                   mCascadeFile;
     private CascadeClassifier      mJavaDetector;
-//    private DetectionBasedTracker  mNativeDetector;
+    private CascadeClassifier      mEyeDetector;
 
-//    private int                    mDetectorType       = JAVA_DETECTOR;
-//    private String[]               mDetectorName;
-
-    private float                  mRelativeFaceSize   = 0.2f;
+    private float                  mRelativeFaceSize   = 0.4f;
     private int                    mAbsoluteFaceSize   = 0;
 
     private CameraBridgeViewBase   mOpenCvCameraView;
+    private int learn_frames = 0;
 
     private BaseLoaderCallback  mLoaderCallback = new BaseLoaderCallback(this) {
         @Override
@@ -65,41 +66,28 @@ public class MainActivity extends Activity implements CvCameraViewListener2 {
                 case LoaderCallbackInterface.SUCCESS:
                 {
                     Log.i(TAG, "OpenCV loaded successfully");
-
-                    // Load native library after(!) OpenCV initialization
-//                    System.loadLibrary("detection_based_tracker");
-
                     try {
-                        // load cascade file from application resources
-                        InputStream is = getResources().openRawResource(R.raw.lbpcascade_frontalface);
-                        File cascadeDir = getDir("cascade", Context.MODE_PRIVATE);
-                        mCascadeFile = new File(cascadeDir, "lbpcascade_frontalface.xml");
-                        FileOutputStream os = new FileOutputStream(mCascadeFile);
-
-                        byte[] buffer = new byte[4096];
-                        int bytesRead;
-                        while ((bytesRead = is.read(buffer)) != -1) {
-                            os.write(buffer, 0, bytesRead);
-                        }
-                        is.close();
-                        os.close();
-
-                        mJavaDetector = new CascadeClassifier(mCascadeFile.getAbsolutePath());
-                        if (mJavaDetector.empty()) {
+                    	
+                    	File frontalFaceCascadeFile=MyImgProcUtil.loadCascadeFile(MainActivity.this, R.raw.haarcascade_frontalface_alt, "haarcascade_frontalface_alt.xml");
+                    	File eyeCascadeFile=MyImgProcUtil.loadCascadeFile(MainActivity.this, R.raw.haarcascade_eye, "haarcascade_eye.xml");
+                    	
+                    	mJavaDetector = new CascadeClassifier(frontalFaceCascadeFile.getAbsolutePath());
+                    	mEyeDetector=new CascadeClassifier(eyeCascadeFile.getAbsolutePath());
+                        if (mJavaDetector.empty()||mEyeDetector.empty()) {
                             Log.e(TAG, "Failed to load cascade classifier");
                             mJavaDetector = null;
-                        } else
-                            Log.i(TAG, "Loaded cascade classifier from " + mCascadeFile.getAbsolutePath());
+                            mEyeDetector=null;
+                        } else{
+                        	Log.i(TAG, "Loaded cascade classifier success");
+                        }
 
-//                        mNativeDetector = new DetectionBasedTracker(mCascadeFile.getAbsolutePath(), 0);
-
-                        cascadeDir.delete();
-
+//                        cascadeDir.delete();
                     } catch (IOException e) {
                         e.printStackTrace();
                         Log.e(TAG, "Failed to load cascade. Exception thrown: " + e);
                     }
-
+    				mOpenCvCameraView.setCameraIndex(CameraBridgeViewBase.CAMERA_ID_BACK);
+    				mOpenCvCameraView.enableFpsMeter();
                     mOpenCvCameraView.enableView();
                 } break;
                 default:
@@ -113,14 +101,10 @@ public class MainActivity extends Activity implements CvCameraViewListener2 {
     /** Called when the activity is first created. */
     @Override
     public void onCreate(Bundle savedInstanceState) {
-        Log.i(TAG, "called onCreate");
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-
         setContentView(R.layout.activity_main);
-
-        mOpenCvCameraView = (CameraBridgeViewBase) findViewById(R.id.fd_activity_surface_view);
-        mOpenCvCameraView.setCameraIndex(CameraBridgeViewBase.CAMERA_ID_FRONT);
+        mOpenCvCameraView = (CameraBridgeViewBase) findViewById(R.id.main_activity_surface_view);
         mOpenCvCameraView.setCvCameraViewListener(this);
     }
 
@@ -161,30 +145,23 @@ public class MainActivity extends Activity implements CvCameraViewListener2 {
     }
 
     public Mat onCameraFrame(CvCameraViewFrame inputFrame) {
-
         mRgba = inputFrame.rgba();
         mGray = inputFrame.gray();
-        
 
-        Log.i(TESTTAG, "rows---->"+mGray.rows());
-        Log.i(TESTTAG, "cols---->"+mGray.cols());
+//        Log.i(TESTTAG, "rows---->"+mGray.rows());
+//        Log.i(TESTTAG, "cols---->"+mGray.cols());
         if (mAbsoluteFaceSize == 0) {
             int height = mGray.rows();
-           
             if (Math.round(height * mRelativeFaceSize) > 0) {
                 mAbsoluteFaceSize = Math.round(height * mRelativeFaceSize);
             }
-//            mNativeDetector.setMinFaceSize(mAbsoluteFaceSize);
         }
 
         MatOfRect faces = new MatOfRect();
-
-//        if (mDetectorType == JAVA_DETECTOR) {
-            if (mJavaDetector != null){
+        if (mJavaDetector != null){
             	mJavaDetector.detectMultiScale(mGray, faces, 1.1, 2, 2, // TODO: objdetect.CV_HAAR_SCALE_IMAGE
                         new Size(mAbsoluteFaceSize, mAbsoluteFaceSize), new Size());
-            }
-//        }
+        }
 //        else if (mDetectorType == NATIVE_DETECTOR) {
 //            if (mNativeDetector != null)
 //                mNativeDetector.detect(mGray, faces);
@@ -194,10 +171,105 @@ public class MainActivity extends Activity implements CvCameraViewListener2 {
         }
 
         Rect[] facesArray = faces.toArray();
-        for (int i = 0; i < facesArray.length; i++)
-            Imgproc.rectangle(mRgba, facesArray[i].tl(), facesArray[i].br(), FACE_RECT_COLOR, 3);
-
+        /*
+         * 
+         
+        for (int i = 0; i < facesArray.length; i++) {
+//        	Log.e(TESTTAG, "r.x  y---->"+facesArray[0].x+"   "+facesArray[0].y);
+			Imgproc.rectangle(mRgba, facesArray[i].tl(), facesArray[i].br(),
+					FACE_RECT_COLOR, 3);
+			Rect r = facesArray[i];
+			double xCenter = (facesArray[i].x + facesArray[i].width + facesArray[i].x) / 2;
+			double yCenter = (facesArray[i].y + facesArray[i].y + facesArray[i].height) / 2;
+			Rect eyearea_right = new Rect(r.x + r.width / 8,
+					(int) (r.y + (r.height / 3.5)), (r.width - 2 * r.width / 8)/2,
+					(int) (r.height/2-r.height/3.5));
+			Rect eyearea_left = new Rect((int)xCenter,
+					(int) (r.y + (r.height / 3.5)), (r.width - 2 * r.width / 8)/2,
+					(int) (r.height/2-r.height/3.5));
+			Imgproc.rectangle(mRgba, eyearea_left.tl(), eyearea_left.br(),
+					new Scalar(255, 0, 0, 255), 2);
+			Imgproc.rectangle(mRgba, eyearea_right.tl(), eyearea_right.br(),
+					new Scalar(255, 0, 0, 255), 2);
+			
+			MatOfRect eyer = new MatOfRect();
+			MatOfRect eyel = new MatOfRect();
+//			mEyeDetector.detectMultiScale(mGray.submat(eyearea_right), eyer);
+//			mEyeDetector.detectMultiScale(mGray.submat(eyearea_left), eyel);
+			Mat sub=mGray.submat(facesArray[i]);
+			
+			mEyeDetector.detectMultiScale(mGray.submat(facesArray[i]), eyer, 1.15, 2,2, new Size(30, 30),
+					new Size());
+			
+			Rect[] eyers=eyer.toArray();
+			Log.i(TESTTAG, "eyers---->"+eyers.length);
+			for(int j=0;j<eyers.length;j++){
+				Imgproc.rectangle(mRgba,eyers[j].tl(),eyers[j].br(),
+						FACE_RECT_COLOR, 2);
+			}
+        }
+        
+        */
+        for (int i = 0; i < facesArray.length; i++) {
+        	Log.e(TESTTAG, "r.x  y---->"+facesArray[0].x+"   "+facesArray[0].y);
+        	
+			Imgproc.rectangle(mRgba, facesArray[i].tl(), facesArray[i].br(),
+					FACE_RECT_COLOR, 3);
+			double xCenter = (facesArray[i].x + facesArray[i].width + facesArray[i].x) / 2;
+			double yCenter = (facesArray[i].y + facesArray[i].y + facesArray[i].height) / 2;
+			Point center = new Point(xCenter, yCenter);
+			Imgproc.circle(mRgba, center, 5, new Scalar(255, 0, 0, 255), 3);
+//			Imgproc.putText(mRgba, "[" + center.x + "," + center.y + "]",
+//					new Point(center.x + 20, center.y + 20),
+//					Core.FONT_HERSHEY_SIMPLEX, 0.7, new Scalar(255, 255, 255,
+//							255));
+			Rect r = facesArray[i];
+			// compute the eye area
+//			Rect eyearea = new Rect(r.x + r.width / 8,
+//					(int) (r.y + (r.height / 4.5)), r.width - 2 * r.width / 8,
+//					(int) (r.height / 3.0));
+			Rect eyearea = new Rect(r.x + r.width / 8,
+					(int) (r.y + (r.height / 3.5)), r.width - 2 * r.width / 8,
+					(int) (r.height *0.214));
+			Rect eyearea_right = new Rect(r.x + r.width / 8,
+					(int) (r.y + (r.height / 3.5)), (r.width - 2 * r.width / 8)/2,
+					(int) (r.height/2-r.height/3.5));
+			Rect eyearea_left = new Rect((int)xCenter,
+					(int) (r.y + (r.height / 3.5)), (r.width - 2 * r.width / 8)/2,
+					(int) (r.height/2-r.height/3.5));
+//			Rect eyearea_right = new Rect(r.x + r.width / 16,
+//					(int) (r.y + (r.height / 4.5)),
+//					(r.width - 2 * r.width / 16) / 2, (int) (r.height / 3.0));
+//			Rect eyearea_left = new Rect(r.x + r.width / 16
+//					+ (r.width - 2 * r.width / 16) / 2,
+//					(int) (r.y + (r.height / 4.5)),
+//					(r.width - 2 * r.width / 16) / 2, (int) (r.height / 3.0));
+			
+			Imgproc.rectangle(mRgba, eyearea_left.tl(), eyearea_left.br(),
+					new Scalar(255, 0, 0, 255), 2);
+			Imgproc.rectangle(mRgba, eyearea_right.tl(), eyearea_right.br(),
+					new Scalar(255, 0, 0, 255), 2);
+//			Imgproc.rectangle(mRgba, eyearea.tl(), eyearea.br(),
+//					new Scalar(255, 0, 0, 255), 2);
+			if (learn_frames < 5) {
+				teplateR=MyImgProcUtil.get_template(mEyeDetector, eyearea_right, 24, mGray, mRgba);
+				teplateL=MyImgProcUtil.get_template(mEyeDetector, eyearea_left, 24, mGray, mRgba);
+				learn_frames++;
+			} else {
+				// Learning finished, use the new templates for template
+				// matching
+				 MyImgProcUtil.match_eye(eyearea_right, teplateR, 0, mGray, mRgba);
+				 MyImgProcUtil.match_eye(eyearea_left, teplateL, 0, mGray, mRgba);
+			}
+			// cut eye areas and put them to zoom windows
+//			Imgproc.resize(mRgba.submat(eyearea_left), mZoomWindow2,
+//					mZoomWindow2.size());
+//			Imgproc.resize(mRgba.submat(eyearea_right), mZoomWindow,
+//					mZoomWindow.size());
+		}
+        
         return mRgba;
+        
     }
 
     @Override
@@ -207,7 +279,6 @@ public class MainActivity extends Activity implements CvCameraViewListener2 {
         mItemFace40 = menu.add("Face size 40%");
         mItemFace30 = menu.add("Face size 30%");
         mItemFace20 = menu.add("Face size 20%");
-//        mItemType   = menu.add(mDetectorName[mDetectorType]);
         return true;
     }
 
@@ -222,11 +293,6 @@ public class MainActivity extends Activity implements CvCameraViewListener2 {
             setMinFaceSize(0.3f);
         else if (item == mItemFace20)
             setMinFaceSize(0.2f);
-//        else if (item == mItemType) {
-//            int tmpDetectorType = (mDetectorType + 1) % mDetectorName.length;
-//            item.setTitle(mDetectorName[tmpDetectorType]);
-//            setDetectorType(tmpDetectorType);
-//        }
         return true;
     }
 
@@ -235,17 +301,23 @@ public class MainActivity extends Activity implements CvCameraViewListener2 {
         mAbsoluteFaceSize = 0;
     }
 
-//    private void setDetectorType(int type) {
-//        if (mDetectorType != type) {
-//            mDetectorType = type;
-//
-//            if (type == NATIVE_DETECTOR) {
-//                Log.i(TAG, "Detection Based Tracker enabled");
-//                mNativeDetector.start();
-//            } else {
-//                Log.i(TAG, "Cascade detector enabled");
-//                mNativeDetector.stop();
-//            }
-//        }
-//    }
+    public void onRecreateClick(View v)
+    {
+    	learn_frames = 0;
+    }
+    
+    private boolean cameraflag=true;
+    public void onSwitchBtnClick(View v)
+    {
+    	mOpenCvCameraView.disableView();
+    	if(cameraflag){
+    		mOpenCvCameraView.setCameraIndex(CameraBridgeViewBase.CAMERA_ID_FRONT);
+    		cameraflag=false;
+        }else{
+        	mOpenCvCameraView.setCameraIndex(CameraBridgeViewBase.CAMERA_ID_BACK);
+        	cameraflag=true;
+        }
+    	mOpenCvCameraView.enableView();
+    }
+    	
 }
